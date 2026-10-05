@@ -15,23 +15,39 @@ from pathlib import Path
 
 from .client import AAAuthError, AAClient, AAConnectionConfig, AAConnectionError
 from .report import render_report, run_catalog
+from .shared_config import load_shared_config, resolve_proxy
 
 STATUS_ORDER = ["OK", "FORBIDDEN", "UNAVAILABLE", "ERROR", "SKIPPED", "NOT_ATTEMPTED", "ACTION_DOCUMENTED"]
 
 
 def build_parser() -> argparse.ArgumentParser:
+    shared = load_shared_config()
     p = argparse.ArgumentParser(
         prog="aa-doc-generator",
         description="Gera documentação da API do Automation Anywhere Control Room a partir de chamadas reais.",
     )
-    p.add_argument("--base-url", default=os.environ.get("AA_BASE_URL", ""), help="URL da Control Room, ex.: https://cr.empresa.com")
-    p.add_argument("--username", default=os.environ.get("AA_USERNAME", ""), help="Usuário (ou conta de serviço).")
-    p.add_argument("--proxy", default=os.environ.get("AA_PROXY", ""), help="Proxy HTTP corporativo host:port, se a rede exigir.")
+    p.add_argument(
+        "--base-url",
+        default=os.environ.get("AA_BASE_URL", "") or shared.get("baseUrl", ""),
+        help="URL da Control Room. Default: AA_BASE_URL, senão o mesmo aa_config.json já usado pelo painel principal, se existir.",
+    )
+    p.add_argument(
+        "--username",
+        default=os.environ.get("AA_USERNAME", "") or shared.get("username", ""),
+        help="Usuário (ou conta de serviço). Mesmo default-chain de --base-url.",
+    )
+    p.add_argument(
+        "--proxy", default="",
+        help="Proxy HTTP corporativo host:port. Default: AA_PROXY, senão RPA_MONITOR_AA_PROXY, senão o "
+             "mesmo proxy padrão do painel principal no Windows (ver shared_config.py) — 'none' força sem proxy.",
+    )
     p.add_argument("--insecure-proxy-tls", action="store_true",
                     default=os.environ.get("AA_PROXY_INSECURE_TLS", "") == "1",
-                    help="Desliga a verificação de certificado TLS ao usar --proxy (só se o proxy fizer inspeção TLS com certificado defeituoso).")
+                    help="Desliga a verificação de certificado TLS ao usar proxy (só se o proxy fizer inspeção TLS com certificado defeituoso).")
     p.add_argument("--output-dir", default="output", help="Pasta onde salvar o relatório (default: ./output).")
-    p.add_argument("--max-list-items", type=int, default=5, help="Itens por lista incluídos no relatório (default: 5).")
+    p.add_argument("--max-list-items", type=int, default=5, help="Itens por lista incluídos NO RELATÓRIO como amostra (default: 5).")
+    p.add_argument("--chart-sample-size", type=int, default=100,
+                   help="Itens buscados só para alimentar os gráficos agregados (default: 100) — nunca aparecem como registro crú no relatório.")
     p.add_argument("--categories", default="", help="Filtra por categorias, separadas por vírgula (default: todas).")
     p.add_argument("--mock", action="store_true", help="Gera um relatório de EXEMPLO com dados fictícios, sem conectar a nenhuma Control Room.")
     return p
@@ -45,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.mock:
         base_url_label = "mock://exemplo"
         username_label = "usuario.exemplo"
-        results = run_catalog(client=None, max_list_items=args.max_list_items, categories=categories, mock=True)
+        results = run_catalog(
+            client=None, max_list_items=args.max_list_items, categories=categories, mock=True,
+            chart_sample_size=args.chart_sample_size,
+        )
     else:
         if not args.base_url:
             print("Erro: informe --base-url (ou AA_BASE_URL).", file=sys.stderr)
@@ -58,14 +77,20 @@ def main(argv: list[str] | None = None) -> int:
             print("Erro: API Key vazia.", file=sys.stderr)
             return 2
 
+        if args.proxy.strip().lower() == "none":
+            proxy = None
+        else:
+            proxy = args.proxy or resolve_proxy()
         config = AAConnectionConfig(
             base_url=args.base_url,
             username=args.username,
             api_key=api_key,
-            proxy=args.proxy or None,
-            verify_tls=(False if (args.proxy and args.insecure_proxy_tls) else None),
+            proxy=proxy,
+            verify_tls=(False if (proxy and args.insecure_proxy_tls) else None),
         )
         client = AAClient(config)
+        if proxy:
+            print(f"Usando proxy HTTP corporativo: {proxy}")
         try:
             client.authenticate()
         except AAAuthError as exc:
@@ -79,7 +104,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Autenticado em {config.base_url} como {config.username}.")
         base_url_label = config.base_url
         username_label = config.username
-        results = run_catalog(client=client, max_list_items=args.max_list_items, categories=categories, mock=False)
+        results = run_catalog(
+            client=client, max_list_items=args.max_list_items, categories=categories, mock=False,
+            chart_sample_size=args.chart_sample_size,
+        )
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     report_md = render_report(

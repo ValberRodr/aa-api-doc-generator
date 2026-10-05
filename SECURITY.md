@@ -32,6 +32,26 @@ documentados** — a ferramenta nunca os chama por conta própria, mesmo em
 modo não-interativo. Se você quiser testar um desses endpoints, copie o
 trecho Python gerado e execute manualmente, com atenção.
 
+## Gráficos de exemplo — minimização de dados
+
+Os gráficos agregados (`--chart-sample-size`, default 100 itens) buscam uma
+amostra maior só para contar (ex.: quantas execuções estão em cada status).
+`charts.py` recebe essa lista, calcula a contagem e devolve só o texto do
+gráfico já renderizado — a lista em si nunca é anexada a `EndpointResult`
+nem chega ao relatório. É estritamente mais seguro que a amostra pequena já
+embutida no relatório (que ainda é redigida, mas é um registro real), porque
+uma contagem agregada não identifica nenhum caso individual.
+
+## Proxy/config padrão deste ambiente
+
+`shared_config.py` hardcoda o mesmo proxy HTTP corporativo e o mesmo
+caminho de config não-sensível já usados pelo painel principal (projeto
+irmão) nesta rede — decisão explícita do responsável do projeto, já que
+esses valores já são públicos no repositório desse outro projeto. Nenhuma
+credencial está nesses literais, só hostname de proxy e caminho de pasta.
+Quem reusar este código fora dessa rede corporativa deve sobrescrever via
+`--proxy`/`AA_PROXY`/`RPA_MONITOR_CONFIG_ROOT` — ver README.
+
 ## Dados de produção nunca versionados
 
 `output/` está no `.gitignore`. Relatórios gerados contra uma Control Room

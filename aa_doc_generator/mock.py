@@ -81,3 +81,31 @@ MOCK_RESPONSES: dict[str, Any] = {
     "roles.list": {"list": [{"id": 2, "name": "AAE_Basic"}]},
     "credentials.list": {"list": [{"id": 3, "name": "Credencial Exemplo", "owner": "exemplo.usuario"}]},
 }
+
+# Amostra maior e mais variada, usada só para desenhar o GRÁFICO de exemplo
+# do modo `--mock` (nunca aparece como registro individual no relatório —
+# ver `charts.py`, que só devolve contagens agregadas).
+MOCK_CHART_ITEMS: dict[str, list[dict[str, Any]]] = {
+    "activity.list": (
+        [{"status": "COMPLETED", "startDateTime": f"2026-01-{d:02d}T08:00:00Z"} for d in range(1, 11) for _ in range(3)]
+        + [{"status": "RUN_FAILED", "startDateTime": f"2026-01-{d:02d}T09:00:00Z"} for d in range(1, 11) for _ in range(1)]
+        + [{"status": "RUNNING", "startDateTime": "2026-01-10T10:00:00Z"}]
+    ),
+    "devices.list": (
+        [{"status": "CONNECTED"} for _ in range(8)] + [{"status": "DISCONNECTED"} for _ in range(2)]
+    ),
+    "scheduler.list": (
+        [{"status": "ENABLED"} for _ in range(12)] + [{"status": "DISABLED"} for _ in range(3)]
+    ),
+    "audit.logs": (
+        [{"action": "DEPLOY"} for _ in range(9)]
+        + [{"action": "LOGIN"} for _ in range(15)]
+        + [{"action": "PACKAGE_UPDATED"} for _ in range(4)]
+        + [{"action": "USER_ROLE_CHANGED"} for _ in range(2)]
+    ),
+    "roles.list": (
+        [{"name": "AAE_Basic"} for _ in range(18)]
+        + [{"name": "AAE_Bot Runner"} for _ in range(6)]
+        + [{"name": "AAE_Admin"} for _ in range(2)]
+    ),
+}

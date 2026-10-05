@@ -5,9 +5,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .catalog import ENDPOINTS, Endpoint
+from .charts import CHART_BUILDERS, PYTHON_CHART_SNIPPETS
 from .client import AAClient
 from .introspect import SENSITIVE_KEY_HINTS, extract_schema
-from .mock import MOCK_RESPONSES
+from .mock import MOCK_CHART_ITEMS, MOCK_RESPONSES
 from .snippets import AUTH_SNIPPET, render_snippet
 
 STATUS_LABEL = {
@@ -30,6 +31,7 @@ class EndpointResult:
     schema: list = field(default_factory=list)
     error: str = ""
     resolved_path: str = ""
+    chart_md: str = ""  # gráfico(s) já renderizados (agregados, sem registro crú)
 
 
 def _redact(value: Any) -> Any:
@@ -57,13 +59,37 @@ def _truncate_lists(value: Any, limit: int, depth: int = 0) -> Any:
     return value
 
 
-def _resolve_path(ep: Endpoint, context: dict[str, Any]) -> str | None:
+def _resolve_path(ep: Endpoint, context: dict[str, Any], size: int) -> str | None:
     path = ep.path
     for p in ep.path_params:
         if p not in context:
             return None
         path = path.replace("{" + p + "}", str(context[p]))
-    return path
+    return path.replace("{size}", str(size))
+
+
+def _fetch_chart_items(client: AAClient, ep: Endpoint, context: dict[str, Any], chart_sample_size: int) -> list[dict[str, Any]]:
+    """Busca uma amostra maior SÓ para agregar em gráfico — os itens somem do
+    escopo assim que `charts.py` termina de contá-los; nunca entram no
+    relatório como registro individual (ver `EndpointResult.chart_md`, que
+    carrega só o gráfico já renderizado)."""
+    chart_ctx = dict(context, page_size=chart_sample_size)
+    resolved_path = _resolve_path(ep, context, chart_sample_size)
+    if resolved_path is None:
+        return []
+    body = ep.body_builder(chart_ctx) if ep.body_builder else None
+    try:
+        resp = client.call(ep.method, resolved_path, body=body)
+    except Exception:
+        return []
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return []
+    try:
+        data = resp.json()
+    except ValueError:
+        return []
+    items = data.get("list") if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
 
 
 def run_catalog(
@@ -71,6 +97,7 @@ def run_catalog(
     max_list_items: int = 5,
     categories: set[str] | None = None,
     mock: bool = False,
+    chart_sample_size: int = 100,
 ) -> list[EndpointResult]:
     results: list[EndpointResult] = []
     context: dict[str, Any] = {}
@@ -90,7 +117,7 @@ def run_catalog(
             ))
             continue
 
-        resolved_path = _resolve_path(ep, context)
+        resolved_path = _resolve_path(ep, context, max_list_items)
         if resolved_path is None:
             results.append(EndpointResult(
                 ep, "SKIPPED", error="Dependia de um ID obtido em outra chamada que não retornou itens.",
@@ -98,7 +125,7 @@ def run_catalog(
             ))
             continue
 
-        body = ep.body_builder(context) if ep.body_builder else None
+        body = ep.body_builder(dict(context, page_size=max_list_items)) if ep.body_builder else None
 
         if mock:
             data = MOCK_RESPONSES.get(ep.key, {})
@@ -132,8 +159,23 @@ def run_catalog(
 
         sample = _redact(_truncate_lists(data, max_list_items))
         schema = extract_schema(sample)
+
+        chart_md = ""
+        if ep.chart:
+            builder = CHART_BUILDERS.get(ep.chart)
+            if builder:
+                if mock:
+                    chart_items = MOCK_CHART_ITEMS.get(ep.key, [])
+                else:
+                    chart_items = _fetch_chart_items(client, ep, context, chart_sample_size)
+                chart_result = builder(chart_items)
+                if chart_result:
+                    pie, bars = chart_result
+                    chart_md = "\n\n".join(part for part in (pie, bars) if part)
+
         results.append(EndpointResult(
-            ep, "OK", http_status=http_status, sample=sample, schema=schema, resolved_path=resolved_path,
+            ep, "OK", http_status=http_status, sample=sample, schema=schema,
+            resolved_path=resolved_path, chart_md=chart_md,
         ))
 
         if ep.key == "activity.list":
@@ -176,12 +218,25 @@ def render_report(
           "`.gitignore` deste projeto).")
     w("")
 
+    w("## Como ler este relatório")
+    w("")
+    w("Para cada chamada da API você encontra, nesta ordem:")
+    w("")
+    w("1. **O que é** — descrição em linguagem simples.")
+    w("2. **📊 O que monitorar** — perguntas de negócio/operação que esse retorno ajuda a responder.")
+    w("3. **Gráfico de exemplo**, quando aplicável — agregado a partir de uma amostra maior (nunca um "
+      "registro individual real).")
+    w("4. **Como chamar em Python** — trecho pronto para copiar.")
+    w("5. **Campos observados** e uma **amostra da resposta** (pequena, redigida).")
+    w("")
+
     w("## Sumário")
     w("")
     w("| Categoria | Endpoint | Método | Caminho | Status |")
     w("|---|---|---|---|---|")
     for r in results:
-        w(f"| {r.endpoint.category} | {r.endpoint.summary} | `{r.endpoint.method}` | `{r.endpoint.path}` | {STATUS_LABEL[r.status]} |")
+        display_path = (r.resolved_path or r.endpoint.path).replace("{size}", str(max_list_items))
+        w(f"| {r.endpoint.category} | {r.endpoint.summary} | `{r.endpoint.method}` | `{display_path}` | {STATUS_LABEL[r.status]} |")
     w("")
 
     w("## Como autenticar")
@@ -207,13 +262,22 @@ def render_report(
             ep = r.endpoint
             w(f"### {ep.summary}")
             w("")
-            w(f"`{ep.method} {ep.path}`" + ("  —  **[AÇÃO — modifica estado, nunca executada automaticamente]**" if ep.is_action else ""))
+            heading_path = (r.resolved_path or ep.path).replace("{size}", str(max_list_items))
+            w(f"`{ep.method} {heading_path}`" + ("  —  **[AÇÃO — modifica estado, nunca executada automaticamente]**" if ep.is_action else ""))
             w("")
             w(ep.description)
             if ep.notes:
                 w("")
                 w(f"**Notas:** {ep.notes}")
             w("")
+
+            if ep.monitoring:
+                w("**📊 O que monitorar com este retorno:**")
+                w("")
+                for idea in ep.monitoring:
+                    w(f"- {idea}")
+                w("")
+
             w(f"**Status nesta coleta:** {STATUS_LABEL[r.status]}" + (f" (HTTP {r.http_status})" if r.http_status else ""))
             if r.error:
                 w("")
@@ -239,6 +303,20 @@ def render_report(
                 w("")
 
             if r.status == "OK":
+                if r.chart_md:
+                    w("**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):")
+                    w("")
+                    w(r.chart_md)
+                    w("")
+                    py_chart = PYTHON_CHART_SNIPPETS.get(ep.chart or "")
+                    if py_chart:
+                        w("Para reproduzir com o histórico completo (não só a amostra):")
+                        w("")
+                        w("```python")
+                        w(py_chart.rstrip())
+                        w("```")
+                        w("")
+
                 w("**Como chamar em Python:**")
                 w("")
                 w("```python")

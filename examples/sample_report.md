@@ -1,18 +1,28 @@
 # Documentação da API — Automation Anywhere Control Room
 
-- **Gerado em:** 2026-10-05 15:18:55 UTC
+- **Gerado em:** 2026-10-05 16:13:20 UTC
 - **Control Room:** `mock://exemplo`
 - **Usuário usado na coleta:** `usuario.exemplo`
 - **Itens de lista por chamada:** 5 (truncado de propósito)
 
 > ⚠️ **RELATÓRIO DE EXEMPLO (`--mock`)** — todos os dados abaixo são fictícios, gerados sem conexão com nenhuma Control Room real. Serve só para mostrar o formato do relatório.
 
+## Como ler este relatório
+
+Para cada chamada da API você encontra, nesta ordem:
+
+1. **O que é** — descrição em linguagem simples.
+2. **📊 O que monitorar** — perguntas de negócio/operação que esse retorno ajuda a responder.
+3. **Gráfico de exemplo**, quando aplicável — agregado a partir de uma amostra maior (nunca um registro individual real).
+4. **Como chamar em Python** — trecho pronto para copiar.
+5. **Campos observados** e uma **amostra da resposta** (pequena, redigida).
+
 ## Sumário
 
 | Categoria | Endpoint | Método | Caminho | Status |
 |---|---|---|---|---|
 | Activity | Lista execuções (deployments) de bots, com paginação. | `POST` | `/v3/activity/list` | ✅ OK |
-| Activity | Detalhe de uma execução específica. | `GET` | `/v3/activity/execution/{activityId}` | ✅ OK |
+| Activity | Detalhe de uma execução específica. | `GET` | `/v3/activity/execution/123456789012345` | ✅ OK |
 | Activity | [AÇÃO] Dispara a execução (deploy) de uma automação em um ou mais dispositivos. | `POST` | `/v3/automations/deploy` | ⚠️ Ação (documentada, não executada) |
 | Activity | [AÇÃO] Interrompe (stop) uma execução em andamento. | `PUT` | `/v2/activity/stop/{activityId}` | ⚠️ Ação (documentada, não executada) |
 | Activity | [AÇÃO] Pausa ou retoma uma execução em andamento (action = pause|resume). | `PUT` | `/v2/activity/{action}/{activityId}` | ⚠️ Ação (documentada, não executada) |
@@ -82,7 +92,55 @@ Equivalente à aba 'Activity' da Control Room. `page` é um OBJETO `{offset, len
 
 **Notas:** Campos de data vêm como `startDateTime`/`endDateTime` (ISO 8601), não `started`/`ended`. Não existe campo de duração pronto — calcule a diferença entre os dois timestamps.
 
+**📊 O que monitorar com este retorno:**
+
+- Taxa de sucesso vs. erro por automação — a base de qualquer painel de saúde de RPA.
+- Duração média/p95 por automação, para detectar degradação de performance antes que vire SLA estourado.
+- Volume de execuções por hora/dia, para achar picos e janelas de manutenção seguras.
+- Ranking de automações/dispositivos com mais falhas recentes, para priorizar correção.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
+
+**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):
+
+```mermaid
+pie showData
+    title Execuções por status (amostra de 41)
+    "COMPLETED" : 30
+    "RUN_FAILED" : 10
+    "RUNNING" : 1
+```
+
+```
+Execuções por dia (amostra)
+
+2026-01-01  ████████████████████████████████ 4
+2026-01-02  ████████████████████████████████ 4
+2026-01-03  ████████████████████████████████ 4
+2026-01-04  ████████████████████████████████ 4
+2026-01-05  ████████████████████████████████ 4
+2026-01-06  ████████████████████████████████ 4
+2026-01-07  ████████████████████████████████ 4
+2026-01-08  ████████████████████████████████ 4
+2026-01-09  ████████████████████████████████ 4
+2026-01-10  ████████████████████████████████████████ 5
+```
+
+Para reproduzir com o histórico completo (não só a amostra):
+
+```python
+import matplotlib.pyplot as plt
+from collections import Counter
+
+# `items` = lista completa de activity.list (pagine até ter o período que
+# quiser — veja a paginação em "Como chamar em Python" acima).
+status_counts = Counter(item["status"] for item in items)
+
+fig, ax = plt.subplots()
+ax.pie(status_counts.values(), labels=status_counts.keys(), autopct="%1.0f%%")
+ax.set_title("Execuções por status")
+plt.savefig("execucoes_por_status.png")
+```
 
 **Como chamar em Python:**
 
@@ -138,11 +196,15 @@ data = resp.json()
 
 ### Detalhe de uma execução específica.
 
-`GET /v3/activity/execution/{activityId}`
+`GET /v3/activity/execution/123456789012345`
 
 Mesmo formato de item da Activity List, para um `activityId` específico.
 
 **Notas:** O gerador usa automaticamente o primeiro ID retornado por activity.list, se houver.
+
+**📊 O que monitorar com este retorno:**
+
+- Drill-down a partir de um alerta: ver o detalhe exato de uma execução específica que apareceu como falha/atrasada no painel agregado.
 
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
@@ -185,6 +247,10 @@ data = resp.json()
 
 Inicia um bot de verdade em produção. Esta ferramenta NUNCA chama este endpoint automaticamente — só documenta o formato esperado do corpo da requisição.
 
+**📊 O que monitorar com este retorno:**
+
+- Base para auto-remediação: disparar de novo uma automação que falhou por motivo transitório (ex.: VM fora do ar), a partir de um alerta do seu próprio painel.
+
 **Status nesta coleta:** ⚠️ Ação (documentada, não executada)
 
 **Corpo esperado da requisição (documentado — confira contra a versão da sua Control Room antes de usar):**
@@ -203,6 +269,10 @@ Inicia um bot de verdade em produção. Esta ferramenta NUNCA chama este endpoin
 `PUT /v2/activity/stop/{activityId}`  —  **[AÇÃO — modifica estado, nunca executada automaticamente]**
 
 Encerra à força uma automação rodando. Nunca executado automaticamente por esta ferramenta.
+
+**📊 O que monitorar com este retorno:**
+
+- Botão de emergência a partir de um alerta de 'execução presa' (duração muito acima do normal).
 
 **Status nesta coleta:** ⚠️ Ação (documentada, não executada)
 
@@ -224,7 +294,34 @@ Nunca executado automaticamente por esta ferramenta.
 
 Equivalente à aba 'Devices'. Traz status de conexão, pool, tipo e versão do agente.
 
+**📊 O que monitorar com este retorno:**
+
+- Dispositivos desconectados AGORA — correlacione com Activity para saber se isso já está causando NAO_INICIOU/atrasos em automações agendadas para rodar neles.
+- Distribuição de carga por pool — pools sobrecarregados (poucos devices, muita automação) viram gargalo antes de aparecer como erro.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
+
+**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):
+
+```mermaid
+pie showData
+    title Dispositivos por status (amostra de 10)
+    "CONNECTED" : 8
+    "DISCONNECTED" : 2
+```
+
+Para reproduzir com o histórico completo (não só a amostra):
+
+```python
+import matplotlib.pyplot as plt
+from collections import Counter
+
+status_counts = Counter(item["status"] for item in items)
+fig, ax = plt.subplots()
+ax.bar(status_counts.keys(), status_counts.values())
+ax.set_ylabel("Dispositivos")
+plt.savefig("dispositivos_por_status.png")
+```
 
 **Como chamar em Python:**
 
@@ -275,6 +372,10 @@ data = resp.json()
 
 Pools são usados para distribuir execuções entre várias máquinas.
 
+**📊 O que monitorar com este retorno:**
+
+- Pools com poucos dispositivos ativos relativos à automação agendada para eles — risco de fila.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
 **Como chamar em Python:**
@@ -317,7 +418,21 @@ data = resp.json()
 
 Cada regra liga uma automação a um calendário (cron/recorrência) e a dispositivos/pools de destino.
 
+**📊 O que monitorar com este retorno:**
+
+- Agendamentos desabilitados que deveriam estar ativos (ou vice-versa) — causa clássica de 'a automação simplesmente não rodou hoje' sem nenhum erro nos logs.
+- Cruzar com Activity: todo agendamento ENABLED deveria ter uma execução correspondente no horário esperado — ausência = alerta de NAO_INICIOU.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
+
+**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):
+
+```mermaid
+pie showData
+    title Agendamentos por status (amostra de 15)
+    "ENABLED" : 12
+    "DISABLED" : 3
+```
 
 **Como chamar em Python:**
 
@@ -377,6 +492,10 @@ Nunca executado automaticamente por esta ferramenta.
 `GET /v2/repository/workspaces`
 
 Workspace é o nível mais alto de organização de pastas/arquivos de automação.
+
+**📊 O que monitorar com este retorno:**
+
+- Inventário: quantos workspaces existem e qual o volume de automações em cada um.
 
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
@@ -459,6 +578,11 @@ data = resp.json()
 
 Cada item representa uma automação armazenada — nome, tipo, pasta, última modificação.
 
+**📊 O que monitorar com este retorno:**
+
+- Automações nunca modificadas há muito tempo rodando em produção — candidatas a revisão técnica.
+- Inventário completo para cruzar com Activity List e achar automações cadastradas que nunca tiveram execução (RPA 'fantasma').
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
 **Como chamar em Python:**
@@ -504,6 +628,10 @@ data = resp.json()
 
 Inclui nome, versão e se o pacote está habilitado.
 
+**📊 O que monitorar com este retorno:**
+
+- Pacotes desatualizados — mesma lógica do 'dependencyStatus' do painel principal: cruzar versão do pacote com o histórico de erro das automações que o usam.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
 **Como chamar em Python:**
@@ -546,7 +674,23 @@ data = resp.json()
 
 Cobre login, deploy, alterações de usuário/papel, mudanças de pacote, etc., conforme a versão.
 
+**📊 O que monitorar com este retorno:**
+
+- Quem alterou/fez deploy de uma automação pouco antes dela começar a falhar — correlação causa-efeito direta com a aba Activity.
+- Volume de ações por usuário/dia — detecta automação de terceiros (script rodando com conta de serviço fora do horário esperado).
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
+
+**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):
+
+```mermaid
+pie showData
+    title Eventos de auditoria por ação (amostra de 30)
+    "LOGIN" : 15
+    "DEPLOY" : 9
+    "PACKAGE_UPDATED" : 4
+    "USER_ROLE_CHANGED" : 2
+```
 
 **Como chamar em Python:**
 
@@ -590,6 +734,10 @@ data = resp.json()
 
 Recurso licenciado separadamente — normal responder 403 (FORBIDDEN) se não estiver habilitado.
 
+**📊 O que monitorar com este retorno:**
+
+- Se licenciado: quais restrições de execução (horário/dispositivo) estão ativas e para quem.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
 **Como chamar em Python:**
@@ -622,6 +770,10 @@ data = resp.json()
 `GET /v2/wlm/queues?page=0&size=5`
 
 Recurso licenciado separadamente — normal responder UNAVAILABLE se o módulo não existir.
+
+**📊 O que monitorar com este retorno:**
+
+- Se licenciado: profundidade de fila (itens pendentes) como sinal antecipado de atraso.
 
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
@@ -706,6 +858,11 @@ data = resp.json()
 
 Diferente das demais 'List API' (que aceitam GET), a busca de usuários é POST — confirmado em produção.
 
+**📊 O que monitorar com este retorno:**
+
+- Contas de usuário desabilitadas ainda com papéis sensíveis atribuídos (higiene de acesso).
+- Quantos usuários humanos vs. contas de serviço — útil para dimensionar licenciamento.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
 **Como chamar em Python:**
@@ -749,7 +906,21 @@ data = resp.json()
 
 Cada papel agrega um conjunto de licenças/permissões atribuível a usuários.
 
+**📊 O que monitorar com este retorno:**
+
+- Distribuição de usuários por papel — concentração de poder (muitos AAE_Admin) é um risco de governança.
+
 **Status nesta coleta:** ✅ OK (HTTP 200)
+
+**📈 Gráfico de exemplo** (agregado a partir de uma amostra maior, sem expor registro individual):
+
+```mermaid
+pie showData
+    title Papéis cadastrados (amostra de 26)
+    "AAE_Basic" : 18
+    "AAE_Bot Runner" : 6
+    "AAE_Admin" : 2
+```
 
 **Como chamar em Python:**
 
@@ -788,6 +959,10 @@ data = resp.json()
 `GET /v2/credentialvault/credentials?page=0&size=5`
 
 A API nunca devolve o valor da credencial em texto puro, só metadados (nome, dono, atributos).
+
+**📊 O que monitorar com este retorno:**
+
+- Credenciais sem dono claro ou não usadas por nenhuma automação ativa (candidatas a revogação).
 
 **Status nesta coleta:** ✅ OK (HTTP 200)
 
