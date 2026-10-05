@@ -1,0 +1,10 @@
+# Relatórios gerados contêm dados reais de produção — NUNCA versionar.
+output/
+*.md.bak
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+.env
